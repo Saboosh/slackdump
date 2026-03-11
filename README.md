@@ -16,6 +16,9 @@
 > - **Result metadata**: The stream `Result` struct now carries `ChannelName`
 >   and `MessageCount`, making it easier for downstream tooling and callbacks
 >   to act on per-channel statistics without additional API calls.
+> - **Automated export script** (`run_slack_export.sh`): A checkpoint-based
+>   wrapper that exports only new messages since the last run and outputs
+>   timestamped markdown files for AI agent consumption.
 
 Purpose:  archive your private and public Slack messages, users, channels,
 files and emojis.  Generate Slack Export without admin privileges.
@@ -147,6 +150,43 @@ If you've cloned the repository and want to run slackdump directly without downl
    ```
 
 Note: You need Go installed on your system (see `go.mod` for the version)
+
+## Automated Export Script (Fork Addition)
+
+`run_slack_export.sh` is a wrapper that automates incremental Slack exports. It
+tracks state via a checkpoint file so each run only fetches new messages since
+the last successful export.
+
+### Prerequisites
+
+- `slackdump` built and available on `PATH` (or in the same directory)
+- `secrets.txt` containing your `SLACK_TOKEN` (loaded via `-load-env`)
+- `channels.txt` with channel exclusions (one `^CHANNEL_ID` per line)
+- `process_export.py` to convert the export archive into markdown
+
+### Usage
+
+```shell
+# First run — exports the last 24 hours (default)
+./run_slack_export.sh
+
+# First run — exports the last 72 hours
+./run_slack_export.sh 72
+
+# Subsequent runs — automatically resumes from the last checkpoint
+./run_slack_export.sh
+```
+
+### How it works
+
+1. Reads `.last_export_time` checkpoint (or falls back to `hours_back`).
+2. Runs `slackdump export` for the window between the checkpoint and now.
+3. Extracts the zip and runs `process_export.py` to produce a timestamped
+   markdown file (`slack_content_YYYYMMDD_HHMM.md`).
+4. Updates the checkpoint only after the full pipeline succeeds.
+
+To force a re-export of a specific window, delete `.last_export_time` and run
+with the desired `hours_back` argument.
 
 
 ## Slackord2: Migrating to Discord
