@@ -1,4 +1,4 @@
-# Slack Dumper (Cortico Fork)
+# Slack Dumper (My Fork)
 
 > **This is a fork of [rusq/slackdump](https://github.com/rusq/slackdump)** with
 > enhancements for generating Slack workspace context for AI agents. Changes in
