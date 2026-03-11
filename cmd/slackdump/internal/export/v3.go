@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/rusq/fsadapter"
@@ -82,13 +84,57 @@ func exportWithDB(ctx context.Context, sess client.Slack, fsa fsadapter.FS, list
 	lg.InfoContext(ctx, "running export...")
 	pb := bootstrap.ProgressBar(ctx, lg, progressbar.OptionShowCount()) // progress bar
 
+	// Running stats for progress output.
+	type channelStats struct {
+		name     string
+		messages int
+	}
+	var (
+		totalMessages  int
+		totalThreads   int
+		channelsSeen   = make(map[string]*channelStats) // channelID -> stats
+		currentChannel string
+	)
+
 	s := stream.New(sess, cfg.Limits,
 		stream.OptOldest(time.Time(cfg.Oldest)),
 		stream.OptLatest(time.Time(cfg.Latest)),
 		stream.OptFailOnNonCritError(cfg.FailOnNonCritical),
 		stream.OptResultFn(func(sr stream.Result) error {
 			lg.DebugContext(ctx, "conversations", "sr", sr.String())
-			pb.Describe(sr.String())
+
+			totalMessages += sr.MessageCount
+
+			switch sr.Type {
+			case stream.RTChannel:
+				currentChannel = sr.ChannelID
+				cs, ok := channelsSeen[sr.ChannelID]
+				if !ok {
+					cs = &channelStats{name: sr.ChannelName}
+					channelsSeen[sr.ChannelID] = cs
+				}
+				cs.messages += sr.MessageCount
+				totalThreads += sr.ThreadCount
+				desc := fmt.Sprintf("<%s> (%d msgs, %d threads) | total: %d msgs, %d channels",
+					sr.ChannelID,
+					cs.messages,
+					sr.ThreadCount,
+					totalMessages,
+					len(channelsSeen),
+				)
+				pb.Describe(desc)
+			case stream.RTThread:
+				desc := fmt.Sprintf("<%s> thread (%d replies) | total: %d msgs, %d channels",
+					currentChannel,
+					sr.MessageCount,
+					totalMessages,
+					len(channelsSeen),
+				)
+				pb.Describe(desc)
+			default:
+				pb.Describe(sr.String())
+			}
+
 			_ = pb.Add(1)
 			return nil
 		}),
@@ -131,7 +177,38 @@ func exportWithDB(ctx context.Context, sess client.Slack, fsa fsadapter.FS, list
 		return err
 	}
 	pb.Describe("OK")
-	lg.InfoContext(ctx, "conversations export finished")
+	lg.InfoContext(ctx, "conversations export finished",
+		"total_messages", totalMessages,
+		"total_threads", totalThreads,
+		"total_channels", len(channelsSeen),
+	)
+
+	// Report channels with no messages (candidates for exclusion list).
+	var emptyChannels []struct{ id, name string }
+	for id, cs := range channelsSeen {
+		if cs.messages == 0 {
+			emptyChannels = append(emptyChannels, struct{ id, name string }{id, cs.name})
+		}
+	}
+	if len(emptyChannels) > 0 {
+		sort.Slice(emptyChannels, func(i, j int) bool {
+			return emptyChannels[i].name < emptyChannels[j].name
+		})
+		var sb strings.Builder
+		for _, ch := range emptyChannels {
+			if ch.name != "" {
+				fmt.Fprintf(&sb, "\n  ^%s  # %s", ch.id, ch.name)
+			} else {
+				fmt.Fprintf(&sb, "\n  ^%s", ch.id)
+			}
+		}
+		lg.InfoContext(ctx, "channels with no messages (exclusion candidates)",
+			"count", len(emptyChannels),
+			"total_scanned", len(channelsSeen),
+		)
+		lg.InfoContext(ctx, "add these to your exclusion list to skip them:"+sb.String())
+	}
+
 	lg.DebugContext(ctx, "chunk files retained", "dir", tmpdir)
 	return nil
 }

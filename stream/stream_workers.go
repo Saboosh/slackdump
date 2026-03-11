@@ -59,7 +59,7 @@ func (cs *Stream) channelWorker(ctx context.Context, proc processor.Conversation
 				if err != nil {
 					return err
 				}
-				results <- Result{Type: RTChannel, ChannelID: req.sl.Channel, ThreadCount: n, IsLast: isLast}
+				results <- Result{Type: RTChannel, ChannelID: req.sl.Channel, ChannelName: channel.Name, ThreadCount: n, MessageCount: len(mm), IsLast: isLast}
 				return nil
 			}); err != nil {
 				results <- Result{Type: RTChannel, ChannelID: req.sl.Channel, Err: err}
@@ -102,7 +102,7 @@ func (cs *Stream) threadWorker(ctx context.Context, proc processor.Conversations
 				if err := procThreadMsg(ctx, proc, channel, req.sl.ThreadTS, req.threadOnly, isLast, msgs); err != nil {
 					return err
 				}
-				results <- Result{Type: RTThread, ChannelID: req.sl.Channel, ThreadTS: req.sl.ThreadTS, IsLast: isLast}
+				results <- Result{Type: RTThread, ChannelID: req.sl.Channel, ThreadTS: req.sl.ThreadTS, MessageCount: len(msgs), IsLast: isLast}
 				return nil
 			}); err != nil {
 				results <- Result{Type: RTThread, ChannelID: req.sl.Channel, ThreadTS: req.sl.ThreadTS, Err: err}

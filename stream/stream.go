@@ -100,12 +100,15 @@ const (
 type Result struct {
 	Type        ResultType
 	ChannelID   string
+	ChannelName string
 	ThreadTS    string
 	ThreadCount int
 	IsLast      bool // true if this is the last message for the channel or thread
 	// Count contains the count of entities in the result. Right now it's
 	// populated only for search results.
 	Count int
+	// MessageCount is the number of messages in this batch.
+	MessageCount int
 	// Err contains the error if the result is an error.
 	Err error
 }
