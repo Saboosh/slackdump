@@ -119,4 +119,11 @@ fi
 echo "${END_TIME}" > "$CHECKPOINT_FILE"
 echo "Checkpoint updated to: ${END_TIME}"
 
+# --- Track channel activity over time ---
+if [[ -f "channel_activity.json" ]]; then
+    echo ""
+    echo "Updating channel activity history..."
+    python3 "${SCRIPT_DIR}/track_channel_activity.py"
+fi
+
 echo "=== Export complete: $OUTPUT_FILE (${START_TIME} to ${END_TIME}) ==="
