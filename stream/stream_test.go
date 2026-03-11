@@ -464,6 +464,111 @@ func TestStream_ListChannels(t *testing.T) {
 	}
 }
 
+func TestResult_String(t *testing.T) {
+	tests := []struct {
+		name string
+		r    Result
+		want string
+	}{
+		{
+			name: "channel result with name",
+			r:    Result{Type: RTChannel, ChannelID: "C123", ChannelName: "general"},
+			want: "<C123>",
+		},
+		{
+			name: "channel result without name",
+			r:    Result{Type: RTChannel, ChannelID: "C123"},
+			want: "<C123>",
+		},
+		{
+			name: "thread result",
+			r:    Result{Type: RTThread, ChannelID: "C123", ThreadTS: "1610000000.000000"},
+			want: "<Thread[C123:1610000000.000000]>",
+		},
+		{
+			name: "search result",
+			r:    Result{Type: RTSearch},
+			want: "<search>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.r.String(); got != tt.want {
+				t.Errorf("Result.String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResult_ChannelNameAndMessageCount(t *testing.T) {
+	t.Run("ChannelName is preserved in Result", func(t *testing.T) {
+		r := Result{
+			Type:         RTChannel,
+			ChannelID:    "C123",
+			ChannelName:  "test-channel",
+			MessageCount: 42,
+			ThreadCount:  3,
+			IsLast:       true,
+		}
+		assert.Equal(t, "test-channel", r.ChannelName)
+		assert.Equal(t, 42, r.MessageCount)
+		assert.Equal(t, 3, r.ThreadCount)
+		assert.True(t, r.IsLast)
+	})
+	t.Run("thread Result has MessageCount", func(t *testing.T) {
+		r := Result{
+			Type:         RTThread,
+			ChannelID:    "C123",
+			ThreadTS:     "1610000000.000000",
+			MessageCount: 7,
+			IsLast:       true,
+		}
+		assert.Equal(t, 7, r.MessageCount)
+		assert.Equal(t, "", r.ChannelName) // threads don't carry channel name
+	})
+}
+
+func TestSyncConversations_ChannelNameInResult(t *testing.T) {
+	f := fixtures.ChunkFileJSONL()
+	srv := chunktest.NewServer(f, "U123")
+	defer srv.Close()
+	sd := slack.New("test", slack.OptionAPIURL(srv.URL()))
+
+	var results []Result
+	cs := New(sd, network.NoLimits, OptResultFn(func(sr Result) error {
+		results = append(results, sr)
+		return nil
+	}))
+
+	w, err := os.Create(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	rec := chunk.NewRecorder(w)
+	defer rec.Close()
+
+	if err := cs.SyncConversations(t.Context(), rec, structures.EntityItem{Id: fixtures.ChunkFileChannelID}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify we got results and channel results have ChannelName populated.
+	assert.NotEmpty(t, results, "expected at least one result")
+	var channelResults int
+	for _, r := range results {
+		if r.Type == RTChannel {
+			channelResults++
+			assert.NotEmpty(t, r.ChannelName, "RTChannel result should have ChannelName set, channel_id=%s", r.ChannelID)
+			assert.Equal(t, fixtures.ChunkFileChannelID, r.ChannelID)
+		}
+		if r.Type == RTThread {
+			assert.GreaterOrEqual(t, r.MessageCount, 0, "thread MessageCount should be non-negative")
+		}
+	}
+	assert.Greater(t, channelResults, 0, "expected at least one RTChannel result")
+}
+
 func TestStream_UsersBulk(t *testing.T) {
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()

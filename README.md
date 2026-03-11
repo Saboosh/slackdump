@@ -1,4 +1,21 @@
-# Slack Dumper
+# Slack Dumper (Cortico Fork)
+
+> **This is a fork of [rusq/slackdump](https://github.com/rusq/slackdump)** with
+> enhancements for generating Slack workspace context for AI agents. Changes in
+> this fork focus on providing better visibility into which channels contain
+> useful data and which can be safely excluded, so you can tune your exports to
+> be faster and more relevant.
+>
+> **Fork enhancements:**
+> - **Empty channel reporting**: After export, channels that returned zero
+>   messages are listed with their IDs and names in exclusion-list format
+>   (`^CHANNEL_ID`), ready to copy into an exclusion file.
+> - **Richer progress output**: The progress bar now shows per-channel message
+>   and thread counts alongside running totals, so you can see at a glance
+>   which channels are contributing data.
+> - **Result metadata**: The stream `Result` struct now carries `ChannelName`
+>   and `MessageCount`, making it easier for downstream tooling and callbacks
+>   to act on per-channel statistics without additional API calls.
 
 Purpose:  archive your private and public Slack messages, users, channels,
 files and emojis.  Generate Slack Export without admin privileges.
@@ -8,6 +25,7 @@ files and emojis.  Generate Slack Export without admin privileges.
 **Quick links**:
 
 - [Installation And Quickstart](#installation-and-quickstart)
+- [Upstream project](https://github.com/rusq/slackdump)
 - [Join the discussion in Telegram](https://t.me/slackdump).
 - [Buy me a cup of tea](https://ko-fi.com/rusq_), or use **GitHub Sponsors**
   button on the top of the page.
