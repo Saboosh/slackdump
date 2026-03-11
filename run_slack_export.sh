@@ -65,7 +65,7 @@ rm -rf export.zip extracted
 # Run slackdump export
 SLACK_START=$(date +%s)
 echo "Running slackdump export..."
-slackdump export \
+"${SCRIPT_DIR}/slackdump" export \
     -workspace corticoai \
     -load-env \
     -files=false \
