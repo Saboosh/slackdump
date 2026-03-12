@@ -230,6 +230,16 @@ func readEntityIndex(r io.Reader, maxEntries int) (map[string]bool, error) {
 			}
 			continue
 		}
+		// Strip inline comments (e.g. "^C123  # channel-name").
+		if idx := strings.IndexByte(line, '#'); idx > 0 {
+			line = strings.TrimSpace(line[:idx])
+			if line == "" {
+				if exit {
+					break
+				}
+				continue
+			}
+		}
 		// test if it's a valid line
 		elements = append(elements, line)
 		if exit {

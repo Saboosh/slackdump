@@ -376,6 +376,24 @@ func Test_readEntityIndex(t *testing.T) {
 			nil,
 			true,
 		},
+		{
+			"inline comments are stripped",
+			args{strings.NewReader("^C123  # some-channel\nC456  # another-channel\n^C789\n"), maxFileEntries},
+			map[string]bool{
+				"C123": false,
+				"C456": true,
+				"C789": false,
+			},
+			false,
+		},
+		{
+			"inline comment with tab",
+			args{strings.NewReader("^C111\t# tabbed-comment\n"), maxFileEntries},
+			map[string]bool{
+				"C111": false,
+			},
+			false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
