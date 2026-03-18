@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 
 	"github.com/rusq/slack"
 
@@ -121,7 +122,10 @@ func New(ctx context.Context, prov auth.Provider, opts ...Option) (*Client, erro
 		wi:     wi,
 	}
 
-	if opt.enterprise || wi.EnterpriseID != "" {
+	// Create the edge client for enterprise workspaces, or when using
+	// cookie-based auth (xoxc tokens).  The edge pipeline calls im.list
+	// which returns Slack Connect 1:1 DMs that conversations.list misses.
+	if opt.enterprise || wi.EnterpriseID != "" || strings.HasPrefix(prov.SlackToken(), "xoxc-") {
 		ecl, err := edge.NewWithInfo(wi, prov)
 		if err != nil {
 			return nil, err
