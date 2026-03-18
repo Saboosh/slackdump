@@ -240,29 +240,34 @@ func (cl *Client) getConversationsContext(ctx context.Context, p *slack.GetConve
 
 	// postprocessing
 
-	// ClientCounts hopefully returns MPIM IDs that we haven't seen in the
-	// user boot response.
+	// ClientCounts hopefully returns MPIM and IM IDs that we haven't seen
+	// in the pipeline results (e.g. Slack Connect 1:1 DMs that im.list
+	// doesn't return).
 	cr, err := cl.ClientCounts(ctx)
 	if err != nil {
 		return nil, "", err
 	}
 
-	// determine which mpims are already in the list, and which need to be
-	// fetched
-	var fetchIDs = make([]string, 0, len(cr.MPIMs))
+	// collect unseen MPIMs and IMs
+	var fetchIDs []string
 	for _, c := range cr.MPIMs {
+		if _, seen := seenChannels[c.ID]; !seen {
+			fetchIDs = append(fetchIDs, c.ID)
+		}
+	}
+	for _, c := range cr.IMs {
 		if _, seen := seenChannels[c.ID]; !seen {
 			fetchIDs = append(fetchIDs, c.ID)
 		}
 	}
 
 	if len(fetchIDs) > 0 {
-		// getting the info on any MPIMs that we haven't seen yet.
-		mpims, err := cl.ConversationsGenericInfo(ctx, fetchIDs...)
+		// getting the info on any conversations that we haven't seen yet.
+		extra, err := cl.ConversationsGenericInfo(ctx, fetchIDs...)
 		if err != nil {
 			return nil, "", err
 		}
-		channels = append(channels, mpims...)
+		channels = append(channels, extra...)
 	}
 	return channels, "", nil
 }

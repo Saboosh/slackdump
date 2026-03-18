@@ -352,6 +352,77 @@ func TestClient_getConversationsContext(t *testing.T) {
 				},
 			},
 			{
+				name:   "fetches unseen IMs from client.counts (Slack Connect DMs)",
+				params: &slack.GetConversationsParameters{},
+				onlyMy: false,
+				setupMock: func(t *testing.T) (*httptest.Server, func(*testing.T)) {
+					type state struct {
+						mu       sync.Mutex
+						fetchIDs []string
+					}
+					st := &state{}
+
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						endpoint := strings.TrimPrefix(r.URL.Path, "/")
+						w.Header().Set("Content-Type", "application/json")
+
+						body, _ := io.ReadAll(r.Body)
+						form, _ := url.ParseQuery(string(body))
+
+						switch endpoint {
+						case "client.userBoot":
+							_, _ = io.WriteString(w, `{"ok":true,"channels":[]}`)
+						case "im.list":
+							// im.list returns D_KNOWN but NOT D_CONNECT (Slack Connect DM)
+							_, _ = io.WriteString(w, `{"ok":true,"ims":[{"id":"D_KNOWN","is_im":true}]}`)
+						case "mpim.list":
+							_, _ = io.WriteString(w, `{"ok":true,"groups":[]}`)
+						case "search.modules.channels":
+							_, _ = io.WriteString(w, `{"ok":true,"module":"channels","query":"","pagination":{"next_cursor":""},"items":[]}`)
+						case "client.counts":
+							// client.counts knows about D_CONNECT even though im.list didn't return it
+							_, _ = io.WriteString(w, `{"ok":true,"ims":[{"id":"D_KNOWN"},{"id":"D_CONNECT"}],"mpims":[]}`)
+						case "conversations.genericInfo":
+							raw := form.Get("updated_channels")
+							m := map[string]int{}
+							_ = json.Unmarshal([]byte(raw), &m)
+							ids := make([]string, 0, len(m))
+							for id := range m {
+								ids = append(ids, id)
+							}
+							slices.Sort(ids)
+							st.mu.Lock()
+							st.fetchIDs = ids
+							st.mu.Unlock()
+							_, _ = io.WriteString(w, `{"ok":true,"channels":[{"id":"D_CONNECT","is_im":true}]}`)
+						default:
+							http.NotFound(w, r)
+						}
+					}))
+
+					validate := func(t *testing.T) {
+						st.mu.Lock()
+						defer st.mu.Unlock()
+						want := []string{"D_CONNECT"}
+						if !reflect.DeepEqual(st.fetchIDs, want) {
+							t.Errorf("conversations.genericInfo IDs = %v, want %v", st.fetchIDs, want)
+						}
+					}
+					return srv, validate
+				},
+				validate: func(t *testing.T, channels []slack.Channel, err error) {
+					ids := make([]string, 0, len(channels))
+					for _, ch := range channels {
+						ids = append(ids, ch.ID)
+					}
+					slices.Sort(ids)
+					wantIDs := []string{"D_CONNECT", "D_KNOWN"}
+					if !reflect.DeepEqual(ids, wantIDs) {
+						t.Errorf("IDs = %v, want %v", ids, wantIDs)
+					}
+				},
+			},
+			{
 				name:       "pipeline error from search parse",
 				params:     &slack.GetConversationsParameters{},
 				onlyMy:     false,

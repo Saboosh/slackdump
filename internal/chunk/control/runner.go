@@ -93,8 +93,13 @@ type superprocessor struct {
 
 func newGenerator(s Streamer, p superprocessor, flags Flags, list *structures.EntityList) generator {
 	// choose your fighter
-	if flags.Refresh {
-		// refresh the given list with the channels from the API.
+	if flags.Refresh || (list.HasIncludes() && list.HasExcludes()) {
+		// Combined mode: emit explicit includes first, then enumerate from
+		// the API (honouring exclusions).  This covers two cases:
+		//   1. -refresh flag (original behaviour)
+		//   2. Mixed lists — e.g. explicit Slack Connect DM IDs alongside
+		//      exclusions, ensuring channels the API can't enumerate are
+		//      still fetched.
 		return &combinedGenerator{
 			s:       s,
 			p:       p.Channels,

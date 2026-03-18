@@ -518,6 +518,18 @@ func Test_newGenerator(t *testing.T) {
 			},
 			want: &apiGenerator{},
 		},
+		{
+			name: "mixed includes and excludes uses combined generator",
+			args: args{
+				s:     nil,
+				flags: Flags{},
+				list: structures.NewEntityListFromItems(
+					structures.EntityItem{Id: "D095XBQNCKV", Include: true},  // explicit Slack Connect DM
+					structures.EntityItem{Id: "C22222222", Include: false},    // exclusion
+				),
+			},
+			want: &combinedGenerator{},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
