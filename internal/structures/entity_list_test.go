@@ -1113,6 +1113,24 @@ func TestTimeParse(t *testing.T) {
 			time.Date(2024, time.January, 10, 0, 0, 0, 0, time.UTC),
 			false,
 		},
+		{
+			"UnixDate format",
+			args{"Tue Mar 17 19:58:12 UTC 2026"},
+			time.Date(2026, time.March, 17, 19, 58, 12, 0, time.UTC),
+			false,
+		},
+		{
+			"RFC3339 format",
+			args{"2026-03-17T19:58:12Z"},
+			time.Date(2026, time.March, 17, 19, 58, 12, 0, time.UTC),
+			false,
+		},
+		{
+			"RFC1123 format",
+			args{"Tue, 17 Mar 2026 19:58:12 UTC"},
+			time.Date(2026, time.March, 17, 19, 58, 12, 0, time.UTC),
+			false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

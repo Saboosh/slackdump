@@ -287,13 +287,26 @@ func (el *EntityList) fromIndex(index map[string]bool) {
 	}
 }
 
-// TimeParse parses a string that can be either a date in 2006-01-02 layout or
-// time in 2006-01-02T15:04:05 layout.
+// TimeParse parses a string that can be either a date in 2006-01-02 layout,
+// time in 2006-01-02T15:04:05 layout, or several other common formats
+// (UnixDate, RFC3339, RFC1123, etc.).
 func TimeParse(s string) (t time.Time, err error) {
-	if t, err = time.Parse(TimeLayout, s); err == nil {
-		return
+	for _, layout := range []string{
+		TimeLayout,
+		DateLayout,
+		time.UnixDate,
+		time.RFC3339,
+		time.RFC1123,
+		time.RFC1123Z,
+		time.RFC822,
+		time.RFC822Z,
+		time.ANSIC,
+	} {
+		if t, err = time.Parse(layout, s); err == nil {
+			return t, nil
+		}
 	}
-	return time.Parse(DateLayout, s)
+	return time.Time{}, fmt.Errorf("unable to parse %q as a timestamp (expected formats: %s, %s, or standard Go time formats)", s, TimeLayout, DateLayout)
 }
 
 // Index returns a map where key is entity, and value show if the entity
