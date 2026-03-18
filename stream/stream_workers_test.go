@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/rusq/slack"
 	"github.com/stretchr/testify/assert"
@@ -26,6 +27,8 @@ import (
 
 	"github.com/rusq/slackdump/v4/internal/client/mock_client"
 	"github.com/rusq/slackdump/v4/internal/fixtures"
+	"github.com/rusq/slackdump/v4/internal/network"
+	"github.com/rusq/slackdump/v4/internal/structures"
 	"github.com/rusq/slackdump/v4/mocks/mock_processor"
 )
 
@@ -130,4 +133,117 @@ func TestStream_canvas(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStream_thread_does_not_apply_global_time_filter(t *testing.T) {
+	// Verify that the thread function does NOT fall back to the stream's
+	// global oldest/latest when the request has zero time bounds. This is
+	// critical for threads discovered during time-filtered channel exports:
+	// their replies should be fetched without time constraints.
+	ctrl := gomock.NewController(t)
+	ms := mock_client.NewMockSlack(ctrl)
+
+	streamOldest := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
+	streamLatest := time.Date(2026, 3, 11, 0, 0, 0, 0, time.UTC)
+
+	cs := &Stream{
+		client:    ms,
+		oldest:    streamOldest,
+		latest:    streamLatest,
+		limits:    limits(network.NoLimits),
+		chanCache: new(chanCache),
+	}
+
+	threadTS := "1710000000.000000"
+	req := request{
+		sl: &structures.SlackLink{
+			Channel:  "C123",
+			ThreadTS: threadTS,
+		},
+		// Oldest/Latest intentionally zero — simulates a thread discovered
+		// during channel scanning (procChanMsg doesn't set these).
+	}
+
+	replyMsg := slack.Message{Msg: slack.Msg{
+		Timestamp:       threadTS,
+		ThreadTimestamp: threadTS,
+		Text:            "parent message",
+	}}
+
+	// The key assertion: Oldest and Latest in the API call should be empty
+	// strings (not the stream's global time filter).
+	ms.EXPECT().
+		GetConversationRepliesContext(gomock.Any(), gomock.Cond(func(x any) bool {
+			params, ok := x.(*slack.GetConversationRepliesParameters)
+			if !ok {
+				return false
+			}
+			return params.Oldest == "" && params.Latest == "" &&
+				params.ChannelID == "C123" && params.Timestamp == threadTS
+		})).
+		Return([]slack.Message{replyMsg}, false, "", nil)
+
+	var callbackCalled bool
+	err := cs.thread(t.Context(), req, func(mm []slack.Message, isLast bool) error {
+		callbackCalled = true
+		assert.Len(t, mm, 1)
+		assert.True(t, isLast)
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.True(t, callbackCalled, "callback should have been called")
+}
+
+func TestStream_thread_respects_explicit_request_time_bounds(t *testing.T) {
+	// Verify that when a request has explicit Oldest/Latest (e.g., user-
+	// requested thread with time bounds), those are passed to the API.
+	ctrl := gomock.NewController(t)
+	ms := mock_client.NewMockSlack(ctrl)
+
+	cs := &Stream{
+		client:    ms,
+		oldest:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		latest:    time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+		limits:    limits(network.NoLimits),
+		chanCache: new(chanCache),
+	}
+
+	reqOldest := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
+	reqLatest := time.Date(2026, 3, 11, 0, 0, 0, 0, time.UTC)
+	threadTS := "1710000000.000000"
+
+	req := request{
+		sl: &structures.SlackLink{
+			Channel:  "C123",
+			ThreadTS: threadTS,
+		},
+		threadOnly: true,
+		Oldest:     reqOldest,
+		Latest:     reqLatest,
+	}
+
+	replyMsg := slack.Message{Msg: slack.Msg{
+		Timestamp:       threadTS,
+		ThreadTimestamp: threadTS,
+	}}
+
+	expectedOldest := structures.FormatSlackTS(reqOldest)
+	expectedLatest := structures.FormatSlackTS(reqLatest)
+
+	ms.EXPECT().
+		GetConversationRepliesContext(gomock.Any(), gomock.Cond(func(x any) bool {
+			params, ok := x.(*slack.GetConversationRepliesParameters)
+			if !ok {
+				return false
+			}
+			// Should use the request's time bounds, NOT the stream's.
+			return params.Oldest == expectedOldest && params.Latest == expectedLatest
+		})).
+		Return([]slack.Message{replyMsg}, false, "", nil)
+
+	err := cs.thread(t.Context(), req, func(mm []slack.Message, isLast bool) error {
+		return nil
+	})
+	assert.NoError(t, err)
 }

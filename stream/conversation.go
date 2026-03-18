@@ -246,13 +246,18 @@ func (cs *Stream) thread(ctx context.Context, req request, callback func(mm []sl
 		)
 		if err := network.WithRetry(ctx, cs.limits.threads, cs.limits.tier.Tier3.Retries, func(ctx context.Context) error {
 			var apiErr error
+			// Use only the request's own time bounds for thread replies.
+			// Do NOT fall back to the stream's global oldest/latest, because
+			// threads discovered during channel scanning should fetch all
+			// replies regardless of the channel's time filter. If the request
+			// has zero times, FormatSlackTS returns "" and the API ignores it.
 			msgs, hasmore, cursor, apiErr = cs.client.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 				ChannelID: req.sl.Channel,
 				Timestamp: req.sl.ThreadTS,
 				Cursor:    cursor,
 				Limit:     cs.limits.tier.Request.Replies,
-				Oldest:    structures.FormatSlackTS(structures.NVLTime(req.Oldest, cs.oldest)),
-				Latest:    structures.FormatSlackTS(structures.NVLTime(req.Latest, cs.latest)),
+				Oldest:    structures.FormatSlackTS(req.Oldest),
+				Latest:    structures.FormatSlackTS(req.Latest),
 				Inclusive: cs.inclusive,
 			})
 			if apiErr == nil && len(msgs) == 0 {
