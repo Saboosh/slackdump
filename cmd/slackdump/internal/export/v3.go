@@ -36,6 +36,7 @@ import (
 	"github.com/rusq/slackdump/v4/internal/client"
 	"github.com/rusq/slackdump/v4/internal/convert/transform"
 	"github.com/rusq/slackdump/v4/internal/convert/transform/fileproc"
+	"github.com/rusq/slackdump/v4/internal/network"
 	"github.com/rusq/slackdump/v4/internal/structures"
 	"github.com/rusq/slackdump/v4/source"
 	"github.com/rusq/slackdump/v4/stream"
@@ -85,10 +86,16 @@ func exportWithDB(ctx context.Context, sess client.Slack, fsa fsadapter.FS, list
 	lg.InfoContext(ctx, "running export...")
 	pb := bootstrap.ProgressBar(ctx, lg, progressbar.OptionShowCount()) // progress bar
 
+	// Reset rate-limit counters so stats reflect only this export run.
+	network.ResetRateLimitStats()
+
 	// Running stats for progress output.
 	type channelStats struct {
-		name     string
-		messages int
+		name      string
+		messages  int
+		threads   int
+		startTime time.Time
+		endTime   time.Time
 	}
 	var (
 		totalMessages  int
@@ -104,6 +111,7 @@ func exportWithDB(ctx context.Context, sess client.Slack, fsa fsadapter.FS, list
 		stream.OptResultFn(func(sr stream.Result) error {
 			lg.DebugContext(ctx, "conversations", "sr", sr.String())
 
+			now := time.Now()
 			totalMessages += sr.MessageCount
 
 			switch sr.Type {
@@ -111,20 +119,27 @@ func exportWithDB(ctx context.Context, sess client.Slack, fsa fsadapter.FS, list
 				currentChannel = sr.ChannelID
 				cs, ok := channelsSeen[sr.ChannelID]
 				if !ok {
-					cs = &channelStats{name: sr.ChannelName}
+					cs = &channelStats{name: sr.ChannelName, startTime: now}
 					channelsSeen[sr.ChannelID] = cs
 				}
 				cs.messages += sr.MessageCount
+				cs.threads += sr.ThreadCount
+				cs.endTime = now
 				totalThreads += sr.ThreadCount
-				desc := fmt.Sprintf("<%s> (%d msgs, %d threads) | total: %d msgs, %d channels",
+				elapsed := now.Sub(cs.startTime).Round(time.Millisecond)
+				desc := fmt.Sprintf("<%s> (%d msgs, %d threads, %s) | total: %d msgs, %d channels",
 					sr.ChannelID,
 					cs.messages,
-					sr.ThreadCount,
+					cs.threads,
+					elapsed,
 					totalMessages,
 					len(channelsSeen),
 				)
 				pb.Describe(desc)
 			case stream.RTThread:
+				if cs, ok := channelsSeen[sr.ChannelID]; ok {
+					cs.endTime = now
+				}
 				desc := fmt.Sprintf("<%s> thread (%d replies) | total: %d msgs, %d channels",
 					currentChannel,
 					sr.MessageCount,
@@ -163,37 +178,65 @@ func exportWithDB(ctx context.Context, sess client.Slack, fsa fsadapter.FS, list
 	}
 	defer ctr.Close()
 
+	streamStart := time.Now()
 	if err := ctr.Run(ctx, list); err != nil {
 		_ = pb.Finish()
 		return err
 	}
+	streamMs := time.Since(streamStart).Milliseconds()
 	_ = pb.Finish()
+
 	// at this point no goroutines are running, we are safe to assume that
 	// everything we need is in the chunk directory.
+	writeIndexStart := time.Now()
 	if err := conv.WriteIndex(ctx); err != nil {
 		return err
 	}
+	writeIndexMs := time.Since(writeIndexStart).Milliseconds()
 	lg.Debug("index written")
+
+	finalizeStart := time.Now()
 	if err := tf.Close(); err != nil {
 		return err
 	}
+	finalizeMs := time.Since(finalizeStart).Milliseconds()
+
 	pb.Describe("OK")
+
+	rlHits, rlWaitMs := network.RateLimitStats()
 	lg.InfoContext(ctx, "conversations export finished",
 		"total_messages", totalMessages,
 		"total_threads", totalThreads,
 		"total_channels", len(channelsSeen),
+		"stream_ms", streamMs,
+		"write_index_ms", writeIndexMs,
+		"finalize_ms", finalizeMs,
+		"rate_limit_hits", rlHits,
+		"rate_limit_wait_ms", rlWaitMs,
 	)
 
 	// Write per-run channel activity to JSON for historical tracking.
 	type channelActivity struct {
-		ID       string `json:"id"`
-		Name     string `json:"name,omitempty"`
-		Messages int    `json:"messages"`
+		ID         string `json:"id"`
+		Name       string `json:"name,omitempty"`
+		Messages   int    `json:"messages"`
+		Threads    int    `json:"threads"`
+		DurationMs int64  `json:"duration_ms,omitempty"`
 	}
 	activity := make([]channelActivity, 0, len(channelsSeen))
 	var emptyCount int
 	for id, cs := range channelsSeen {
-		activity = append(activity, channelActivity{ID: id, Name: cs.name, Messages: cs.messages})
+		var durMs int64
+		if !cs.startTime.IsZero() && !cs.endTime.IsZero() {
+			durMs = cs.endTime.Sub(cs.startTime).Milliseconds()
+		}
+		activity = append(activity, channelActivity{
+			ID:         id,
+			Name:       cs.name,
+			Messages:   cs.messages,
+			Threads:    cs.threads,
+			DurationMs: durMs,
+		})
 		if cs.messages == 0 {
 			emptyCount++
 		}
@@ -202,13 +245,55 @@ func exportWithDB(ctx context.Context, sess client.Slack, fsa fsadapter.FS, list
 		return activity[i].Name < activity[j].Name
 	})
 
+	// Log top-5 slowest channels for quick bottleneck identification.
+	if len(activity) > 0 {
+		byDur := make([]channelActivity, len(activity))
+		copy(byDur, activity)
+		sort.Slice(byDur, func(i, j int) bool {
+			return byDur[i].DurationMs > byDur[j].DurationMs
+		})
+		n := 5
+		if len(byDur) < n {
+			n = len(byDur)
+		}
+		lg.InfoContext(ctx, "slowest channels (by duration)")
+		for i := range n {
+			ch := byDur[i]
+			lg.InfoContext(ctx, "  slow channel",
+				"rank", i+1,
+				"name", ch.Name,
+				"id", ch.ID,
+				"messages", ch.Messages,
+				"threads", ch.Threads,
+				"duration_ms", ch.DurationMs,
+			)
+		}
+	}
+
 	activityData := struct {
-		Timestamp string            `json:"timestamp"`
-		Channels  []channelActivity `json:"channels"`
+		Timestamp  string `json:"timestamp"`
+		TotalMs    int64  `json:"total_stream_ms"`
+		Phases     struct {
+			StreamMs     int64 `json:"stream_ms"`
+			WriteIndexMs int64 `json:"write_index_ms"`
+			FinalizeMs   int64 `json:"finalize_ms"`
+		} `json:"phases"`
+		RateLimits struct {
+			Hits        int64 `json:"hits"`
+			TotalWaitMs int64 `json:"total_wait_ms"`
+		} `json:"rate_limits"`
+		Channels []channelActivity `json:"channels"`
 	}{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		TotalMs:   streamMs + writeIndexMs + finalizeMs,
 		Channels:  activity,
 	}
+	activityData.Phases.StreamMs = streamMs
+	activityData.Phases.WriteIndexMs = writeIndexMs
+	activityData.Phases.FinalizeMs = finalizeMs
+	activityData.RateLimits.Hits = rlHits
+	activityData.RateLimits.TotalWaitMs = rlWaitMs
+
 	const activityFile = "channel_activity.json"
 	if activityJSON, err := json.MarshalIndent(activityData, "", "  "); err != nil {
 		lg.ErrorContext(ctx, "failed to marshal channel activity", "error", err)

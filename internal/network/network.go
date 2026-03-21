@@ -26,11 +26,31 @@ import (
 	"runtime/trace"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rusq/slack"
 	"golang.org/x/time/rate"
 )
+
+// rateLimitStats tracks cumulative rate-limiting across all WithRetry calls.
+var (
+	rateLimitHits   atomic.Int64
+	rateLimitWaitMs atomic.Int64
+)
+
+// RateLimitStats returns the total number of rate-limit responses received and
+// the total milliseconds spent sleeping due to rate limits since the last
+// ResetRateLimitStats call (or program start).
+func RateLimitStats() (hits int64, totalWaitMs int64) {
+	return rateLimitHits.Load(), rateLimitWaitMs.Load()
+}
+
+// ResetRateLimitStats resets the accumulated rate-limit statistics to zero.
+func ResetRateLimitStats() {
+	rateLimitHits.Store(0)
+	rateLimitWaitMs.Store(0)
+}
 
 // defNumAttempts is the default number of retry attempts.
 const (
@@ -148,6 +168,8 @@ func WithRetry(ctx context.Context, lim *rate.Limiter, maxAttempts int, fn func(
 			slog.Debug("resuming after EOF")
 			continue
 		case errors.As(cbErr, &rle):
+			rateLimitHits.Add(1)
+			rateLimitWaitMs.Add(rle.RetryAfter.Milliseconds())
 			slog.InfoContext(ctx, "got rate limited, sleeping", "retry_after", rle.RetryAfter.String(), "error", cbErr)
 			tracelogf(ctx, "info", "got rate limited, sleeping %s (%s)", rle.RetryAfter, cbErr)
 			if err := sleepCtx(ctx, rle.RetryAfter); err != nil {
